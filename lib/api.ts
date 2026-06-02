@@ -5,7 +5,41 @@ import type {
   AuditEntry, AuthedUser, LoginHistoryEntry, LoginResponse, RegisterResponse, Rule, RuleListResponse,
 } from './types';
 
-const BASE = process.env.NEXT_PUBLIC_ADMIN_API_BASE_URL ?? 'http://localhost:8084';
+// Resolve the Admin API base URL — robust for BOTH local and remote deploys.
+//
+// In the browser we derive <protocol>//<hostname>:<API port> from the page's
+// own location, so the same bundle works on localhost, a LAN IP, or a domain
+// with no rebuild. An explicit NEXT_PUBLIC_ADMIN_API_BASE_URL still wins (e.g.
+// API behind a reverse proxy on a different host) — EXCEPT when it points at
+// localhost while the page is served from a remote host. That combination is
+// always a stale/misconfigured build-time bake (the historic cause of
+// "POST http://localhost:8084 net::ERR_CONNECTION_REFUSED" on servers), so we
+// ignore it and derive instead. SSR/non-browser falls back to the explicit
+// value or localhost.
+function isLocalHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+}
+
+function resolveApiBase(): string {
+  const explicit = (process.env.NEXT_PUBLIC_ADMIN_API_BASE_URL ?? '').trim().replace(/\/+$/, '');
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location;
+    const port = process.env.NEXT_PUBLIC_ADMIN_API_PORT ?? '8084';
+    const derived = `${protocol}//${hostname}:${port}`;
+    if (!explicit) return derived;
+    // Guard: explicit localhost baked into a bundle served from a remote host
+    // can never reach the API — derive from the real page host instead.
+    let explicitHost = '';
+    try { explicitHost = new URL(explicit).hostname; } catch { /* malformed → derive */ return derived; }
+    if (isLocalHost(explicitHost) && !isLocalHost(hostname)) return derived;
+    return explicit;
+  }
+
+  return explicit || 'http://localhost:8084';
+}
+
+const BASE = resolveApiBase();
 
 interface ApiOpts {
   method?: string;
